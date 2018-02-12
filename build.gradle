@@ -1,0 +1,14 @@
+plugins {
+	id 'java-library'
+}
+
+description 'ArcEye Stage'
+sourceCompatibility = 1.7
+targetCompatibility = 1.7
+compileJava.options.bootClasspath = java7RTPath
+
+/*
+dependencies {
+	api files(arceyeDependBase + 'utils' + arceyeDependPath + 'org.unclesniper.arceye.utils.jar')
+}
+*/
