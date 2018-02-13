@@ -4,7 +4,7 @@ import java.nio.ByteBuffer;
 
 public interface NodeIO<NodeT> {
 
-	int getMinNodeBufferSize();
+	int getNodeBufferSize();
 
 	long writeNode(NodeT node, ByteBuffer buffer, StageFile file);
 

@@ -1,5 +1,8 @@
 package org.unclesniper.arceye.stage;
 
+import java.util.List;
+import java.nio.ByteBuffer;
+
 /*   [s0]
  * forward:
  *   s0 <- [s1]
@@ -15,9 +18,9 @@ package org.unclesniper.arceye.stage;
  *                -> s3
  */
 
-public class History<StateT> implements NodeIO<Snapshot<StateT>> {
+public class History<StateT> {
 
-	public static class Snapshot<StateT> {
+	public static final class Snapshot<StateT> {
 
 		public static class NextLink<StateT> {
 
@@ -26,6 +29,8 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 			private Snapshot<StateT> next;
 
 		}
+
+		public static int STATIC_PART_BUFFER_SIZE = 16;
 
 		private final History<StateT> history;
 
@@ -77,6 +82,41 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 			return nextLinks;
 		}
 
+		public int getNextLinkCount() {
+			return nextLinks == null ? 0 : nextLinks.size();
+		}
+
+		public ByteBuffer getByteBuffer() {
+			ByteBuffer buffer = history.ioBuffer;
+			int haveSize = buffer == null ? 0 : buffer.capacity();
+			int wantSize = Snapshot.STATIC_PART_BUFFER_SIZE + getNextLinkCount() * 8
+					+ history.stateIO.getNodeBufferSize();
+			if(haveSize < wantSize)
+				history.ioBuffer = buffer = ByteBuffer.allocate(wantSize);
+			return buffer;
+		}
+
+		public void save() {
+			//TODO
+		}
+
+		public void saveAll(StageFile stage, NodeIO<StateT> stateIO) {
+			//TODO
+		}
+
+		public void liftAll() {
+			//TODO
+		}
+
+		public void updateCacheLevel() {
+			//TODO
+		}
+
+		public Snapshot<StateT> mapToStage(StageFile stage) {
+			//TODO
+			return null;
+		}
+
 	}
 
 	public static final int DEFAULT_MAX_CACHED_STRATA = 1;
@@ -102,11 +142,11 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 	}
 
 	public void setStage(StageFile stage) {
-		if(state == this.stage)
+		if(stage == this.stage)
 			return;
 		if(stateIO != null) {
 			if(this.stage == null)
-				currentState.saveAll(stage);
+				currentState.saveAll(stage, null);
 			else if(stage == null)
 				currentState.liftAll();
 			else
@@ -123,7 +163,10 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 		if(stateIO == this.stateIO)
 			return;
 		if(stage != null) {
-			//TODO
+			if(this.stateIO == null)
+				currentState.saveAll(null, stateIO);
+			else if(stateIO == null)
+				currentState.liftAll();
 		}
 		this.stateIO = stateIO;
 	}
@@ -133,8 +176,12 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 	}
 
 	public void setMaxCachedStrata(int maxCachedStrata) {
+		if(maxCachedStrata < 0)
+			maxCachedStrata = History.DEFAULT_MAX_CACHED_STRATA;
+		if(maxCachedStrata == this.maxCachedStrata)
+			return;
 		this.maxCachedStrata = maxCachedStrata;
-		//TODO
+		currentState.updateCacheLevel();
 	}
 
 	public Snapshot<StateT> getCurrentState() {
@@ -142,7 +189,7 @@ public class History<StateT> implements NodeIO<Snapshot<StateT>> {
 	}
 
 	public void save() {
-		//TODO
+		currentState.saveAll(null, null);
 	}
 
 }
