@@ -38,13 +38,15 @@ public class History<StateT> {
 
 		private final long stratum;
 
-		private final StateT state;
+		private StateT state;
 
-		private final long previousID;
+		private long previousID;
 
 		private Snapshot<StateT> previous;
 
-		private List<NextLink<Snapshot>> nextLinks;
+		private List<NextLink<StateT>> nextLinks;
+
+		private NextLink<StateT> linkInPrevious;
 
 		public Snapshot(History<StateT> history, StateT state) {
 			this.history = history;
@@ -78,7 +80,7 @@ public class History<StateT> {
 			return previous;
 		}
 
-		public Iterable<NextLink<Snapshot>> getNextLinks() {
+		public Iterable<NextLink<StateT>> getNextLinks() {
 			return nextLinks;
 		}
 
@@ -89,18 +91,52 @@ public class History<StateT> {
 		public ByteBuffer getByteBuffer() {
 			ByteBuffer buffer = history.ioBuffer;
 			int haveSize = buffer == null ? 0 : buffer.capacity();
-			int wantSize = Snapshot.STATIC_PART_BUFFER_SIZE + getNextLinkCount() * 8
+			int wantSize = Snapshot.STATIC_PART_BUFFER_SIZE + getNextLinkCount() * 8 + 4
 					+ history.stateIO.getNodeBufferSize();
 			if(haveSize < wantSize)
 				history.ioBuffer = buffer = ByteBuffer.allocate(wantSize);
 			return buffer;
 		}
 
-		public void save() {
-			//TODO
+		private void saveThisNode(boolean forward, boolean backward) {
+			if(id >= 0l)
+				return;
+			ByteBuffer buffer = getByteBuffer();
+			synchronized(buffer) {
+				buffer.clear();
+				buffer.putLong(stratum).putLong(backward ? previousID : -1l);
+				if(forward) {
+					buffer.putInt(nextLinks.size());
+					for(NextLink<StateT> link : nextLinks)
+						if(link.nextID >= 0l)
+							buffer.putLong(link.nextID);
+				}
+				else
+					buffer.putInt(0);
+				history.stateIO.writeNode(state, buffer);
+				buffer.flip();
+				id = history.stage.writeChunk(buffer);
+			}
 		}
 
-		public void saveAll(StageFile stage, NodeIO<StateT> stateIO) {
+		private long saveBackward() {
+			if(id < 0l) {
+				if(stratum > 0l && previousID < 0l) {
+					linkInPrevious.nextID = -1l;
+					previousID = previous.saveBackward();
+				}
+				saveThisNode(false, true);
+			}
+			return id;
+		}
+
+		public void saveAll() {
+			if(id >= 0l)
+				return;
+			if(stratum > 0l && previousID < 0l) {
+				linkInPrevious.nextID = -1l;
+				previousID = previous.saveBackward();
+			}
 			//TODO
 		}
 
@@ -145,8 +181,11 @@ public class History<StateT> {
 		if(stage == this.stage)
 			return;
 		if(stateIO != null) {
-			if(this.stage == null)
-				currentState.saveAll(stage, null);
+			if(this.stage == null) {
+				this.stage = stage;
+				currentState.saveAll();
+				return;
+			}
 			else if(stage == null)
 				currentState.liftAll();
 			else
@@ -163,8 +202,11 @@ public class History<StateT> {
 		if(stateIO == this.stateIO)
 			return;
 		if(stage != null) {
-			if(this.stateIO == null)
-				currentState.saveAll(null, stateIO);
+			if(this.stateIO == null) {
+				this.stateIO = stateIO;
+				currentState.saveAll();
+				return;
+			}
 			else if(stateIO == null)
 				currentState.liftAll();
 		}
@@ -189,7 +231,7 @@ public class History<StateT> {
 	}
 
 	public void save() {
-		currentState.saveAll(null, null);
+		currentState.saveAll();
 	}
 
 }
