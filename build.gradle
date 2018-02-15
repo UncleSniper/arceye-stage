@@ -5,7 +5,11 @@ plugins {
 description 'ArcEye Stage'
 sourceCompatibility = 1.7
 targetCompatibility = 1.7
-compileJava.options.bootClasspath = java7RTPath
+
+tasks.withType(JavaCompile) {
+	options.bootClasspath = java7RTPath
+	options.compilerArgs << "-Xlint:unchecked"
+}
 
 /*
 dependencies {
