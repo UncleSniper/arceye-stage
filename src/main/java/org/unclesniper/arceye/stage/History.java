@@ -2,6 +2,7 @@ package org.unclesniper.arceye.stage;
 
 import java.util.List;
 import java.nio.ByteBuffer;
+import java.util.LinkedList;
 
 /*   [s0]
  * forward:
@@ -117,7 +118,7 @@ public class History<StateT> {
 			return buffer;
 		}
 
-		private void saveThisNode(Snapshot<StateT> skipForward, boolean backward) {
+		private void saveThisNode(Snapshot<StateT> skipForward, boolean backward, StageFile stage) {
 			if(id >= 0l)
 				return;
 			ByteBuffer buffer = getSaveBuffer();
@@ -137,7 +138,7 @@ public class History<StateT> {
 				else
 					buffer.putInt(0);
 				buffer.flip();
-				id = history.stage.writeChunk(buffer);
+				id = (stage != null ? stage : history.stage).writeChunk(buffer);
 			}
 		}
 
@@ -145,7 +146,7 @@ public class History<StateT> {
 			if(id < 0l) {
 				if(stratum > 0l && previousID < 0l)
 					previousID = previous.saveBackward(minCachedStratum, this);
-				saveThisNode(skipForward, true);
+				saveThisNode(skipForward, true, null);
 			}
 			if(stratum == minCachedStratum)
 				previous = null;
@@ -163,7 +164,7 @@ public class History<StateT> {
 						}
 					}
 				}
-				saveThisNode(null, false);
+				saveThisNode(null, false, null);
 			}
 			return id;
 		}
@@ -191,7 +192,7 @@ public class History<StateT> {
 					}
 				}
 			}
-			saveThisNode(null, true);
+			saveThisNode(null, true, null);
 		}
 
 		public void liftAll() {
@@ -247,12 +248,104 @@ public class History<StateT> {
 		}
 
 		private void updateCacheLevelForward(long maxCachedStratum) {
-			//TODO
+			if(nextLinks == null)
+				return;
+			if(stratum >= maxCachedStratum) {
+				for(NextLink<StateT> link : nextLinks) {
+					if(link.next != null) {
+						link.nextID = link.next.saveForward(maxCachedStratum);
+						link.next = null;
+					}
+				}
+			}
+			else {
+				for(NextLink<StateT> link : nextLinks) {
+					if(link.next == null) {
+						if(link.nextID < 0l)
+							continue;
+						link.next = history.loadSnapshot(link.nextID, -1l, null);
+					}
+					link.next.updateCacheLevelForward(maxCachedStratum);
+				}
+			}
 		}
 
 		private Snapshot<StateT> mapToStage(StageFile stage) {
-			//TODO
-			return null;
+			return mapToStageBackward(stage, null);
+		}
+
+		private Snapshot<StateT> mapToStageBackward(StageFile stage, Snapshot<StateT> skipForward) {
+			// map backward
+			long newPreviousID;
+			Snapshot<StateT> newPrevious;
+			if(previous != null) {
+				newPrevious = previous.mapToStageBackward(stage, this);
+				newPreviousID = newPrevious.id;
+			}
+			else if(previousID >= 0l) {
+				newPrevious = null;
+				newPreviousID = history
+						.loadSnapshot(previousID, -1l, null)
+						.mapToStageBackward(stage, this)
+						.id;
+			}
+			else {
+				newPrevious = null;
+				newPreviousID = -1l;
+			}
+			// map forward
+			List<NextLink<StateT>> newNextLinks = mapNextLinksToStage(stage, skipForward);
+			Snapshot<StateT> newSnapshot = new Snapshot<>(history, -1l, stratum, state, newPreviousID);
+			newSnapshot.previous = newPrevious;
+			newSnapshot.nextLinks = newNextLinks;
+			newSnapshot.saveThisNode(null, true, stage);
+			return newSnapshot;
+		}
+
+		private Snapshot<StateT> mapToStageForward(StageFile stage) {
+			List<NextLink<StateT>> newNextLinks = mapNextLinksToStage(stage, null);
+			Snapshot<StateT> newSnapshot = new Snapshot<>(history, -1l, stratum, state, -1l);
+			newSnapshot.nextLinks = newNextLinks;
+			newSnapshot.saveThisNode(null, false, stage);
+			return newSnapshot;
+		}
+
+		private List<NextLink<StateT>> mapNextLinksToStage(StageFile stage, Snapshot<StateT> skipForward) {
+			List<NextLink<StateT>> newNextLinks;
+			if(nextLinks == null || nextLinks.isEmpty())
+				newNextLinks = null;
+			else {
+				newNextLinks = new LinkedList<NextLink<StateT>>();
+				for(NextLink<StateT> link : nextLinks) {
+					long newNextID;
+					Snapshot<StateT> newNext;
+					if(
+						skipForward != null
+						&& (link.next == null || link.next == skipForward)
+						&& (link.nextID < 0l || link.nextID == skipForward.id)
+					) {
+						newNext = null;
+						newNextID = -1l;
+					}
+					else if(link.next != null) {
+						newNext = link.next.mapToStageForward(stage);
+						newNextID = newNext.id;
+					}
+					else if(link.nextID >= 0l) {
+						newNext = null;
+						newNextID = history
+								.loadSnapshot(link.nextID, -1l, null)
+								.mapToStageForward(stage)
+								.id;
+					}
+					else {
+						newNext = null;
+						newNextID = -1l;;
+					}
+					newNextLinks.add(new NextLink<StateT>(newNextID, newNext));
+				}
+			}
+			return newNextLinks;
 		}
 
 	}
@@ -269,10 +362,41 @@ public class History<StateT> {
 
 	private Snapshot<StateT> currentState;
 
+	private int forwardTail;
+
+	private int backwardTail;
+
 	public History(StateT initialState, StageFile stage, NodeIO<StateT> stateIO) {
 		this.stage = stage;
 		this.stateIO = stateIO;
 		currentState = new Snapshot<StateT>(this, initialState);
+	}
+
+	public History(StateT initialState) {
+		this(initialState, null, null);
+	}
+
+	public History(StageFile stage, NodeIO<StateT> stateIO, long rootID, int maxCachedStrata, boolean attach) {
+		this.stage = stage;
+		this.stateIO = stateIO;
+		this.maxCachedStrata = maxCachedStrata < 0 ? History.DEFAULT_MAX_CACHED_STRATA : maxCachedStrata;
+		currentState = loadSnapshot(rootID, -1l, null);
+		if(attach)
+			updateCacheLevel();
+		else
+			setStage(null);
+	}
+
+	public History(StageFile stage, NodeIO<StateT> stateIO, long rootID, int maxCachedStrata) {
+		this(stage, stateIO, rootID, maxCachedStrata, true);
+	}
+
+	public History(StageFile stage, NodeIO<StateT> stateIO, long rootID, boolean attach) {
+		this(stage, stateIO, rootID, -1, attach);
+	}
+
+	public History(StageFile stage, NodeIO<StateT> stateIO, long rootID) {
+		this(stage, stateIO, rootID, -1, true);
 	}
 
 	public StageFile getStage() {
@@ -285,15 +409,28 @@ public class History<StateT> {
 		if(stateIO != null) {
 			if(this.stage == null) {
 				this.stage = stage;
-				currentState.saveAll();
+				saveAll();
 				return;
 			}
 			else if(stage == null)
-				currentState.liftAll();
+				liftAll();
 			else
 				currentState = currentState.mapToStage(stage);
 		}
 		this.stage = stage;
+	}
+
+	private void saveAll() {
+		currentState.saveAll();
+		if(forwardTail > maxCachedStrata)
+			forwardTail = maxCachedStrata;
+		if(backwardTail > maxCachedStrata)
+			backwardTail = maxCachedStrata;
+	}
+
+	private void liftAll() {
+		currentState.liftAll();
+		forwardTail = backwardTail = -1;
 	}
 
 	public NodeIO<StateT> getStateIO() {
@@ -306,11 +443,11 @@ public class History<StateT> {
 		if(stage != null) {
 			if(this.stateIO == null) {
 				this.stateIO = stateIO;
-				currentState.saveAll();
+				saveAll();
 				return;
 			}
 			else if(stateIO == null)
-				currentState.liftAll();
+				liftAll();
 		}
 		this.stateIO = stateIO;
 	}
@@ -326,7 +463,12 @@ public class History<StateT> {
 			return;
 		this.maxCachedStrata = maxCachedStrata;
 		if(stateIO != null && stage != null)
-			currentState.updateCacheLevel();
+			updateCacheLevel();
+	}
+
+	private void updateCacheLevel() {
+		currentState.updateCacheLevel();
+		forwardTail = backwardTail = maxCachedStrata;
 	}
 
 	public Snapshot<StateT> getCurrentState() {
@@ -334,7 +476,7 @@ public class History<StateT> {
 	}
 
 	public long save() {
-		currentState.saveAll();
+		saveAll();
 		return currentState.id;
 	}
 
@@ -364,6 +506,8 @@ public class History<StateT> {
 			StateT state = stateIO.readNode(buffer);
 			Snapshot<StateT> snapshot = new Snapshot<>(this, id, stratum, state, previousID);
 			int linkCount = buffer.getInt();
+			if(linkCount > 0)
+				snapshot.nextLinks = new LinkedList<Snapshot.NextLink<StateT>>();
 			int bufSize = buffer.capacity();
 			int batchSize = bufSize / nodeSize;
 			long offset = id + Snapshot.STATIC_PART_BUFFER_SIZE + 4;
