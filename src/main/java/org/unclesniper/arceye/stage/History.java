@@ -348,6 +348,18 @@ public class History<StateT> {
 			return newNextLinks;
 		}
 
+		public void reinstate() {
+			long hs = history.currentState.stratum;
+			if(hs == stratum)
+				return;
+			if(hs < stratum)
+				history.redoRec(this);
+			else {
+				while(stratum < history.currentState.stratum)
+					history.undo();
+			}
+		}
+
 	}
 
 	public static final int DEFAULT_MAX_CACHED_STRATA = 1;
@@ -399,11 +411,11 @@ public class History<StateT> {
 		this(stage, stateIO, rootID, -1, true);
 	}
 
-	public StageFile getStage() {
+	public final StageFile getStage() {
 		return stage;
 	}
 
-	public void setStage(StageFile stage) {
+	public final void setStage(StageFile stage) {
 		if(stage == this.stage)
 			return;
 		if(stateIO != null) {
@@ -433,11 +445,11 @@ public class History<StateT> {
 		forwardTail = backwardTail = -1;
 	}
 
-	public NodeIO<StateT> getStateIO() {
+	public final NodeIO<StateT> getStateIO() {
 		return stateIO;
 	}
 
-	public void setStateIO(NodeIO<StateT> stateIO) {
+	public final void setStateIO(NodeIO<StateT> stateIO) {
 		if(stateIO == this.stateIO)
 			return;
 		if(stage != null) {
@@ -452,11 +464,11 @@ public class History<StateT> {
 		this.stateIO = stateIO;
 	}
 
-	public int getMaxCachedStrata() {
+	public final int getMaxCachedStrata() {
 		return maxCachedStrata;
 	}
 
-	public void setMaxCachedStrata(int maxCachedStrata) {
+	public final void setMaxCachedStrata(int maxCachedStrata) {
 		if(maxCachedStrata < 0)
 			maxCachedStrata = History.DEFAULT_MAX_CACHED_STRATA;
 		if(maxCachedStrata == this.maxCachedStrata)
@@ -471,11 +483,11 @@ public class History<StateT> {
 		forwardTail = backwardTail = maxCachedStrata;
 	}
 
-	public Snapshot<StateT> getCurrentState() {
+	public final Snapshot<StateT> getCurrentState() {
 		return currentState;
 	}
 
-	public long save() {
+	public final long save() {
 		saveAll();
 		return currentState.id;
 	}
@@ -531,6 +543,143 @@ public class History<StateT> {
 			}
 			return snapshot;
 		}
+	}
+
+	public final void advance(StateT newState) {
+		if(currentState.nextLinks == null)
+			currentState.nextLinks = new LinkedList<Snapshot.NextLink<StateT>>();
+		else if(stage != null && stateIO != null) {
+			for(Snapshot.NextLink<StateT> link : currentState.nextLinks) {
+				if(link.nextID < 0l && link.next != null)
+					link.nextID = link.next.saveForward(currentState.stratum);
+				link.next = null;
+			}
+		}
+		Snapshot<StateT> newSnapshot = new Snapshot<>(this, -1l,
+				currentState.stratum + 1l, newState, currentState.id);
+		newSnapshot.previous = currentState;
+		currentState.nextLinks.add(new Snapshot.NextLink<StateT>(-1l, null));
+		++backwardTail;
+		currentState = newSnapshot;
+		if(forwardTail == 0) {
+			if(stage != null && stateIO != null)
+				updateCacheLevel();
+		}
+		else if(forwardTail > 0)
+			--forwardTail;
+	}
+
+	public final void undo() {
+		if(currentState.stratum == 0l)
+			throw new IllegalStateException("Nothing to undo");
+		if(currentState.previous == null)
+			currentState.previous = loadSnapshot(currentState.previousID, currentState.id, currentState);
+		++forwardTail;
+		currentState = currentState.previous;
+		if(backwardTail == 0) {
+			if(stage != null && stateIO != null)
+				updateCacheLevel();
+		}
+		else if(backwardTail > 0)
+			--backwardTail;
+	}
+
+	public final void undo(long desiredStratum) {
+		if(desiredStratum < 0l)
+			throw new IllegalArgumentException("There is no such thing as a negative stratum: " + desiredStratum);
+		if(desiredStratum > currentState.stratum)
+			throw new IllegalArgumentException("Redo requested as undo: Desired stratum is " + desiredStratum
+					+ ", which is greater than the current stratum " + currentState.stratum);
+		while(desiredStratum < currentState.stratum)
+			undo();
+	}
+
+	public final void undo(Snapshot<StateT> desiredSnapshot) {
+		if(desiredSnapshot.history != this)
+			throw new IllegalArgumentException("Illegal undo: Cannot reinstate snapshot from another history");
+		if(desiredSnapshot.stratum > currentState.stratum)
+			throw new IllegalArgumentException("Redo requested as undo: Desired stratum is "
+					+ desiredSnapshot.stratum + ", which is greater than the current stratum "
+					+ currentState.stratum);
+		while(desiredSnapshot.stratum < currentState.stratum)
+			undo();
+	}
+
+	public final void redo(long nextID) {
+		if(nextID < 0l)
+			throw new IllegalArgumentException("There is no such thing as a negative chunk ID: " + nextID);
+		if(currentState.nextLinks != null) {
+			for(Snapshot.NextLink<StateT> link : currentState.nextLinks) {
+				if(link.nextID == nextID) {
+					redo(link);
+					return;
+				}
+			}
+		}
+		throw new IllegalArgumentException("Illegal redo by chunk ID: Snapshot " + nextID
+				+ " is not a direct successor of current snapshot"
+				+ (currentState.id < 0l ? "" : " " + currentState.id));
+	}
+
+	public final void redo(Snapshot<StateT> desiredSnapshot) {
+		if(desiredSnapshot.history != this)
+			throw new IllegalArgumentException("Illegal redo: Cannot reinstate snapshot from another history");
+		if(desiredSnapshot.stratum < currentState.stratum)
+			throw new IllegalArgumentException("Undo requested as redo: Desired stratum is "
+					+ desiredSnapshot.stratum + ", which is less than the current stratum "
+					+ currentState.stratum);
+		redoRec(desiredSnapshot);
+	}
+
+	private void redoRec(Snapshot<StateT> desiredSnapshot) {
+		if(desiredSnapshot.stratum == currentState.stratum)
+			return;
+		if(desiredSnapshot.stratum > currentState.stratum + 1l)
+			redoRec(desiredSnapshot.previous);
+		if(currentState.nextLinks != null) {
+			for(Snapshot.NextLink<StateT> link : currentState.nextLinks) {
+				if(
+					link.next == desiredSnapshot
+					|| (
+						link.next == null
+						&& link.nextID >= 0l
+						&& desiredSnapshot.id >= 0l
+						&& link.nextID == desiredSnapshot.id
+					)
+				) {
+					redo(link);
+					break;
+				}
+			}
+		}
+		throw new IllegalStateException("Inconsistency in history during redo: Desired snapshot "
+				+ (desiredSnapshot.id < 0l ? "" : desiredSnapshot.id + " ")
+				+ "should be a direct successor of current snapshot"
+				+ (currentState.id < 0l ? "" : " " + currentState.id) + ", but isn't");
+	}
+
+	private void redo(Snapshot.NextLink<StateT> desiredLink) {
+		Snapshot<StateT> newSnapshot = desiredLink.next;
+		if(newSnapshot == null) {
+			newSnapshot = loadSnapshot(desiredLink.nextID, -1l, null);
+			newSnapshot.previous = currentState;
+			newSnapshot.previousID = currentState.id;
+		}
+		for(Snapshot.NextLink<StateT> link : currentState.nextLinks) {
+			if(link == desiredLink)
+				link.nextID = -1l;
+			else if(link.nextID < 0l && link.next != null)
+				link.nextID = link.next.saveForward(currentState.stratum);
+			link.next = null;
+		}
+		++backwardTail;
+		currentState = newSnapshot;
+		if(forwardTail == 0) {
+			if(stage != null && stateIO != null)
+				updateCacheLevel();
+		}
+		else if(forwardTail > 0)
+			--forwardTail;
 	}
 
 }
