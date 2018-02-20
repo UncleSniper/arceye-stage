@@ -487,6 +487,8 @@ public final class StageFile implements Closeable {
 	 * @param offset
 	 * 	<i>chunk ID</i> (id est, file offset) from
 	 * 	which to read
+	 * @throws NullPointerException
+	 * 	if <tt>buffer</tt> is <tt>null</tt>
 	 * @throws IllegalArgumentException
 	 * 	if the position is negative
 	 * @throws ChunkOffsetOutOfRangeException
@@ -496,6 +498,7 @@ public final class StageFile implements Closeable {
 	 * @throws ChunkReadIOException
 	 * 	if the underlying channel read fails with
 	 * 	an {@link IOException}
+	 * @since 0.1
 	 */
 	public void readChunk(ByteBuffer buffer, long offset) {
 		boolean interrupted;
@@ -522,28 +525,140 @@ public final class StageFile implements Closeable {
 		}
 	}
 
+	/**
+	 * Write a chunk of data to the stage file.
+	 *
+	 * The <tt>buffer</tt> indicates the source of
+	 * the bytes to be written: The <i>remaining</i>
+	 * size (id est, the difference between its
+	 * <i>limit</i> and its <i>position</i>) is
+	 * appended to the file with bytes taken from
+	 * the buffer starting at its <i>position</i>.
+	 * This method is analogous to
+	 * {@link #readChunk(ByteBuffer, long) readChunk}:
+	 * <ul>
+	 * 	<li>
+	 * 		Short writes are avoided by performing
+	 * 		as many writes as necessary, until the
+	 * 		desired number of bytes have been
+	 * 		written.
+	 * 	</li>
+	 * 	<li>
+	 * 		If this method returns normally, the
+	 * 		exact number of bytes requested are
+	 * 		guaranteed to have been written, in
+	 * 		sequence, without intervening writes
+	 * 		from other sources, provided that each
+	 * 		such source uses only this method to
+	 * 		perform modifications to the channel,
+	 * 		or uses
+	 * 		{@link #sequence(Runnable) sequence}
+	 * 		to synchronize all such modifications.
+	 * 	</li>
+	 * 	<li>
+	 * 		If any exception is thrown, any number
+	 * 		of bytes, up to and including the
+	 * 		requested number, may have been
+	 * 		transferred; the number actually
+	 * 		transferred can be introspected by the
+	 * 		caller by considering by how much the
+	 * 		<i>position</i> of the <tt>buffer</tt>
+	 * 		has moved. Under no circumstances
+	 * 		(regardless of whether the call returns
+	 * 		normally or throws an exception) will
+	 * 		the <i>limit</i> of the <tt>buffer</tt>
+	 * 		be altered.
+	 * 	</li>
+	 * 	<li>
+	 * 		This method neither considers nor
+	 * 		modifies the current <i>position</i>
+	 * 		of the underlying channel. Instead, the
+	 * 		bytes are written to the end of the
+	 * 		file, meaning the written region will
+	 * 		start at the offset equal to what the
+	 * 		size of the file was when the call to
+	 * 		this method acquired the internal lock.
+	 * 		(However, the only means of ensuring
+	 * 		that no intervening writes are
+	 * 		performed that might alter the size
+	 * 		between calling this method and
+	 * 		acquisition of the lock, or between
+	 * 		release of the lock and return of
+	 * 		control to the caller, is by using
+	 * 		{@link #sequence(Runnable) sequence}.)
+	 * 		It is therefore safe to introspect
+	 * 		and/or alter the <i>position</i> of
+	 * 		the underlying channel without the
+	 * 		knowledge of <tt>this</tt> object.
+	 * 	</li>
+	 * 	<li>
+	 * 		This method catches any {@link IOException}
+	 * 		thrown by the underlying channel write
+	 * 		and throws a <tt>ChunkWriteIOException</tt>
+	 * 		encapsulating the original exception
+	 * 		instead. Any {@link ClosedChannelException}
+	 * 		is handled gracefully by attemping to
+	 * 		reopen the channel. A failed reopen
+	 * 		causes a <tt>ChunkWriteIOException</tt>
+	 * 		to be thrown.
+	 * 	</li>
+	 * 	<li>
+	 * 		This method is thread safe in the face of
+	 * 		concurrent calls to itself,
+	 * 		{@link #readChunk(ByteBuffer, long) readChunk},
+	 * 		{@link #sequence(Runnable) sequence},
+	 * 		alteration of the <i>position</i> of the
+	 * 		underlying channel, and any and all non-modifying
+	 * 		operations on that channel, as well as closing
+	 * 		the channel, whether via {@link #close() close}
+	 * 		or by closing the underlying channel itself.
+	 * 		It is, however, <b>not</b> thread safe in
+	 * 		the face of any concurrent modifying operations
+	 * 		on the channel, such as writes not guarded
+	 * 		by this method nor <tt>sequence</tt>.
+	 * 	</li>
+	 * </ul>
+	 * See {@link #readChunk(ByteBuffer, long)} for
+	 * a more detailed explanation of the general
+	 * I/O semantics.
+	 *
+	 * @param buffer
+	 * 	source buffer from which bytes to be written
+	 * 	are drawn
+	 * @return
+	 * 	resulting <i>chunk ID</i> of the chunk
+	 * 	written, equating the file offset from
+	 * 	which the bytes may be retrieved using
+	 * 	{@link #readChunk(ByteBuffer, long) readChunk}
+	 * @throws NullPointerException
+	 * 	if <tt>buffer</tt> is <tt>null</tt>
+	 * @throws ChunkWriteIOException
+	 * 	if the underlying channel write fails
+	 * 	with an {@link IOException}
+	 * @since 0.1
+	 */
 	public long writeChunk(ByteBuffer buffer) {
 		boolean interrupted;
-		for(;;) {
-			interrupted = Thread.interrupted();
-			try {
-				synchronized(lock) {
+		synchronized(lock) {
+			for(;;) {
+				interrupted = Thread.interrupted();
+				try {
 					long start = channel.size();
 					long offset = start;
 					while(buffer.remaining() > 0)
 						offset += channel.write(buffer, offset);
 					return start;
 				}
-			}
-			catch(ClosedChannelException cce) {
-				reopen(false);
-			}
-			catch(IOException ioe) {
-				throw new ChunkWriteIOException(path, ioe);
-			}
-			finally {
-				if(interrupted)
-					Thread.currentThread().interrupt();
+				catch(ClosedChannelException cce) {
+					reopen(false);
+				}
+				catch(IOException ioe) {
+					throw new ChunkWriteIOException(path, ioe);
+				}
+				finally {
+					if(interrupted)
+						Thread.currentThread().interrupt();
+				}
 			}
 		}
 	}
