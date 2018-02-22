@@ -11,8 +11,11 @@ tasks.withType(JavaCompile) {
 	options.compilerArgs << "-Xlint:unchecked"
 }
 
-/*
-dependencies {
-	api files(arceyeDependBase + 'utils' + arceyeDependPath + 'org.unclesniper.arceye.utils.jar')
+repositories {
+	jcenter()
 }
-*/
+
+dependencies {
+	testImplementation 'junit:junit:4.12'
+	testImplementation 'org.assertj:assertj-core:2.9.0'
+}
