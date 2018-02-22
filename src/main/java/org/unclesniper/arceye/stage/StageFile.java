@@ -663,6 +663,22 @@ public final class StageFile implements Closeable {
 		}
 	}
 
+	/**
+	 * Protect actions from concurrent access.
+	 *
+	 * The given <tt>task</tt> is executed while holding
+	 * the lock on which modifications synchronize.
+	 * Calls to
+	 * {@link #writeChunk(ByteBuffer) writeChunk},
+	 * and {@link #close() close}, as well as reopen
+	 * attempts will block while the task is being
+	 * run.
+	 *
+	 * @param task
+	 * 	action to execute while synchronized on the
+	 * 	internal lock
+	 * @since 0.1
+	 */
 	public void sequence(Runnable task) {
 		synchronized(lock) {
 			task.run();
