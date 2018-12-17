@@ -1,0 +1,81 @@
+set module "stage"
+
+artifact pipeline {
+	key "classes"
+	scandir {
+		"src/main/java"
+		files
+		wildcard "*.java"
+	}
+	regex {
+		"\\.java$" ".class"
+		rebaseFrom "src/main/java"
+		rebaseTo "bin/main"
+		exec "compile" {
+			"javac" "-cp" "bin/main" "-d" "bin/main" "-sourcepath" "src/main/java" source
+			loud
+		}
+	}
+}
+
+artifact split "genClasses" {
+	"classes"
+	tree "actualClasses" {
+		"bin/main"
+		files
+		wildcard "*.class"
+	}
+}
+
+artifact file "jar" {
+	"dist/org.unclesniper.arceye.${module}.jar"
+	exec "jar" {
+		"jar" "cf" dest "-C" "bin/main" "."
+		artifact "genClasses"
+	}
+}
+
+goal build require "jar"
+
+artifact artifacts "testLib" {
+	name "test dependencies"
+	tree "junit.jar" {
+		"lib"
+		files
+		wildcard "junit-*.jar"
+	}
+	tree "assertj-core.jar" {
+		"lib"
+		files
+		wildcard "assertj-core-*.jar"
+	}
+}
+
+artifact pipeline {
+	key "testClasses"
+	scandir {
+		"src/test/java"
+		files
+		wildcard "*.java"
+	}
+	regex {
+		"\\.java$" ".class"
+		rebaseFrom "src/text/java"
+		rebaseTo "bin/test"
+		exec "compile" {
+			"javac" "-cp" "bin/test:dist/org.unclesniper.arceye.${module}.jar" "-d" "bin/test" "-sourcepath" "src/test/java" source
+			loud
+		}
+	}
+}
+
+artifact split "testGenClasses" {
+	"testClasses"
+	tree "testActualClasses" {
+		"bin/test"
+		files
+		wildcard "*.class"
+	}
+}
+
+
