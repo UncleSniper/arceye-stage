@@ -1,4 +1,11 @@
+projectName "arceye-stage"
+
 set module "stage"
+
+artifact directory "mainSrc" "src/main/java"
+artifact directory "mainBin" { "bin/main" mkdir }
+artifact directory "testSrc" "src/test/java"
+artifact directory "testBin" { "bin/test" mkdir }
 
 artifact pipeline {
 	key "classes"
@@ -6,13 +13,18 @@ artifact pipeline {
 		"src/main/java"
 		files
 		wildcard "*.java"
+		not wildcard "package-info.java"
 	}
 	regex {
 		"\\.java$" ".class"
 		rebaseFrom "src/main/java"
 		rebaseTo "bin/main"
 		exec "compile" {
-			"javac" "-cp" "bin/main" "-d" "bin/main" "-sourcepath" "src/main/java" source
+			"javac"
+				"-cp" aux "mainBin"
+				"-d" aux "mainBin"
+				"-sourcepath" aux "mainSrc"
+				source
 			loud
 		}
 	}
@@ -29,26 +41,30 @@ artifact split "genClasses" {
 
 artifact file "jar" {
 	"dist/org.unclesniper.arceye.${module}.jar"
-	exec "jar" {
-		"jar" "cf" dest "-C" "bin/main" "."
-		artifact "genClasses"
+	zip {
+		piece {
+			from "bin/main"
+			"genClasses"
+		}
 	}
 }
 
 goal build require "jar"
 
-artifact artifacts "testLib" {
-	name "test dependencies"
-	tree "junit.jar" {
-		"lib"
-		files
+artifact tree "testLib" {
+	"lib"
+	files
+	any {
 		wildcard "junit-*.jar"
-	}
-	tree "assertj-core.jar" {
-		"lib"
-		files
 		wildcard "assertj-core-*.jar"
 	}
+}
+
+artifact artifacts "testClassPath" {
+	name "test classpath"
+	"testBin"
+	"jar"
+	"testLib"
 }
 
 artifact pipeline {
@@ -60,10 +76,14 @@ artifact pipeline {
 	}
 	regex {
 		"\\.java$" ".class"
-		rebaseFrom "src/text/java"
+		rebaseFrom "src/test/java"
 		rebaseTo "bin/test"
 		exec "compile" {
-			"javac" "-cp" "bin/test:dist/org.unclesniper.arceye.${module}.jar" "-d" "bin/test" "-sourcepath" "src/test/java" source
+			"javac"
+				"-cp" aux "testClassPath" merge
+				"-d" aux "testBin"
+				"-sourcepath" aux "testSrc"
+				source
 			loud
 		}
 	}
@@ -78,4 +98,19 @@ artifact split "testGenClasses" {
 	}
 }
 
+artifact file "test jar" {
+	"dist/tests.jar"
+	zip {
+		piece {
+			from "bin/test"
+			"testGenClasses"
+		}
+	}
+}
 
+goal test require "test jar"
+
+goal clean {
+	delete "bin"
+	delete "dist"
+}
