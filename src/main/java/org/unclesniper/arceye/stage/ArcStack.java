@@ -125,4 +125,76 @@ public class ArcStack<ElementT> {
 
 	private final NodeIO<Node<ElementT>> nodeIO = new WholeNodeIO();
 
+	public ArcStack() {}
+
+	public ArcStack(StageFile stage, NodeIO<ElementT> elementIO) {
+		this.stage = stage;
+		this.elementIO = elementIO;
+	}
+
+	public ArcStack(StageFile stage, NodeIO<ElementT> elementIO, long topID, int maxCachedNodes, boolean attach) {
+		this.stage = stage;
+		this.elementIO = elementIO;
+		this.maxCachedNodes = maxCachedNodes <= 0 ? ArcStack.DEFAULT_MAX_CACHED_NODES : maxCachedNodes;
+		if(topID >= 0l) {
+			ByteBuffer buffer = getLoadBuffer();
+			synchronized(buffer) {
+				top = nodeIO.readNode(buffer, stage, topID);
+			}
+			cachedNodes = 1;
+		}
+		if(!attach)
+			setStage(null);
+	}
+
+	private ByteBuffer getLoadBuffer() {
+		ByteBuffer buffer = ioBuffer;
+		int haveSize = buffer == null ? 0 : buffer.capacity();
+		int wantSize = Node.STATIC_PART_BUFFER_SIZE + elementIO.getNodeBufferSize();
+		if(haveSize < wantSize)
+			ioBuffer = buffer = ByteBuffer.allocate(wantSize);
+		return buffer;
+	}
+
+	public final StageFile getStage() {
+		return stage;
+	}
+
+	public final void setStage(StageFile stage) {
+		if(stage == this.stage)
+			return;
+		if(elementIO != null) {
+			if(this.stage == null) {
+				this.stage = stage;
+				saveAll();
+				return;
+			}
+			if(stage == null)
+				liftAll();
+			else if(top != null)
+				top = mapToStage(stage);
+		}
+		this.stage = stage;
+	}
+
+	private void saveAll() {
+		ByteBuffer buffer = getLoadBuffer();
+		synchronized(buffer) {
+			for(Node<ElementT> node = top; node != null; node = node.parent) {
+				if(node.id >= 0l)
+					break;
+				node.id = nodeIO.writeNode(node, buffer, stage);
+			}
+		}
+	}
+
+	private void liftAll() {
+		//TODO
+	}
+
+	private Node<ElementT> mapToStage(StageFile stage) {
+		//TODO
+		return null;
+	}
+
 }

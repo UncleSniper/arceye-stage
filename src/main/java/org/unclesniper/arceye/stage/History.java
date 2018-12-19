@@ -424,7 +424,7 @@ public class History<StateT> {
 				saveAll();
 				return;
 			}
-			else if(stage == null)
+			if(stage == null)
 				liftAll();
 			else
 				currentState = currentState.mapToStage(stage);
@@ -495,10 +495,7 @@ public class History<StateT> {
 	private ByteBuffer getLoadBuffer() {
 		ByteBuffer buffer = ioBuffer;
 		int haveSize = buffer == null ? 0 : buffer.capacity();
-		int wantSize = Snapshot.STATIC_PART_BUFFER_SIZE + 4;
-		int nbsize = stateIO.getNodeBufferSize();
-		if(wantSize < nbsize)
-			wantSize = nbsize;
+		int wantSize = Snapshot.STATIC_PART_BUFFER_SIZE + 4 + stateIO.getNodeBufferSize();
 		if(haveSize < wantSize)
 			ioBuffer = buffer = ByteBuffer.allocate(wantSize);
 		return buffer;
