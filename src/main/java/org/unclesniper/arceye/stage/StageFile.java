@@ -511,6 +511,7 @@ public final class StageFile implements Closeable {
 						throw new ChunkOffsetOutOfRangeException(path, offset);
 					offset += count;
 				}
+				break;
 			}
 			catch(ClosedChannelException cce) {
 				reopen(true);
