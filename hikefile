@@ -56,6 +56,7 @@ artifact tree "testLib" {
 	files
 	any {
 		wildcard "junit-*.jar"
+		wildcard "hamcrest-*.jar"
 		wildcard "assertj-core-*.jar"
 	}
 }
@@ -98,7 +99,7 @@ artifact split "testGenClasses" {
 	}
 }
 
-artifact file "test jar" {
+artifact file "testJar" {
 	"dist/tests.jar"
 	zip {
 		piece {
@@ -108,7 +109,20 @@ artifact file "test jar" {
 	}
 }
 
-goal test require "test jar"
+artifact artifacts "junitClassPath" {
+	name "JUnit classpath"
+	"jar"
+	"testJar"
+	"testLib"
+}
+
+goal test exec "junit" {
+	"java"
+		"-cp" aux "junitClassPath" merge
+		"org.junit.runner.JUnitCore"
+		"org.unclesniper.arceye.stage.TestSuite"
+	loud
+}
 
 goal clean {
 	delete "bin"
